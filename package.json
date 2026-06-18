@@ -4,15 +4,16 @@
   "description": "Eesti poodide hinnavõrdlus",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+     "build": "echo 'Build complete'",
+  "start": "node app.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
     "axios": "^1.6.0",
-    "cheerio": "^1.0.0-rc.12",
-    "cors": "^2.8.5"
+    "cheerio": "^1.2.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
   },
   "engines": {
-    "node": "18.x"
+    "node": "20.x"
   }
 }

@@ -7,8 +7,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // ----------------------------
-// CORS (lubab päringuid kõikjalt)
+// SCRAPERAPI VÕTI
 // ----------------------------
+const SCRAPER_API_KEY = '18ab58b0d0b512941eaf40ceb2d66ac5';
+
 app.use(cors());
 app.use(express.json());
 
@@ -16,87 +18,10 @@ app.use(express.json());
 // PÄISED
 // ----------------------------
 const HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     'Accept-Language': 'et-EE,et;q=0.9,en;q=0.8',
 };
-
-// ----------------------------
-// PROXY-D (värskendatud)
-// ----------------------------
-function getProxyList() {
-    return [
-        'http://37.49.224.15:3128',
-        'http://5.45.126.128:8080',
-        'http://85.192.61.93:7443',
-        'http://159.223.87.50:443',
-        'http://8.219.97.248:80',
-        'http://47.91.29.151:33427',
-        'http://47.237.107.41:1080',
-        'http://47.91.110.148:8008',
-        'http://45.88.174.195:8080',
-        'http://5.161.50.82:8118',
-        'http://138.124.114.42:7443',
-        'http://89.169.53.40:7443',
-        'http://213.165.42.185:7443',
-        'http://79.137.205.130:7443',
-        'http://64.188.77.26:3128',
-        'http://88.210.21.224:1080',
-        'http://207.246.234.115:4669',
-        'http://209.141.46.220:9091',
-        'http://174.138.119.88:80',
-        'http://92.119.56.37:5555',
-        'http://217.174.244.117:3129',
-        'http://62.60.149.161:3128',
-    ];
-}
-
-// ----------------------------
-// PÄRING PROXYGA
-// ----------------------------
-async function requestWithProxy(url, headers = HEADERS, timeout = 15000) {
-    const proxies = getProxyList();
-    const shuffled = proxies.sort(() => Math.random() - 0.5);
-
-    for (const proxy of shuffled) {
-        try {
-            const proxyUrl = new URL(proxy);
-            const response = await axios.get(url, {
-                headers: headers,
-                proxy: {
-                    host: proxyUrl.hostname,
-                    port: parseInt(proxyUrl.port),
-                    protocol: proxyUrl.protocol.replace(':', '')
-                },
-                timeout: timeout,
-                validateStatus: (status) => status === 200
-            });
-
-            if (response.data && response.data.length > 5000) {
-                console.log(`✅ Proxy töötab: ${proxy}`);
-                return response;
-            }
-        } catch (error) {
-            console.log(`❌ Proxy ei tööta: ${proxy}`);
-            continue;
-        }
-    }
-
-    // Kui ükski proxy ei tööta, proovi ilma proxyta
-    try {
-        const response = await axios.get(url, {
-            headers: headers,
-            timeout: timeout
-        });
-        if (response.data && response.data.length > 5000) {
-            return response;
-        }
-    } catch (error) {
-        console.log('❌ Ilma proxyta ei tööta');
-    }
-
-    return null;
-}
 
 // ----------------------------
 // COOP (API, TÖÖTAB ALATI)
@@ -148,390 +73,257 @@ async function searchCoop(query) {
 }
 
 // ----------------------------
-// SELVER (PROXYGA)
+// SELVER - SCRAPERAPI RENDERDUSEGA
 // ----------------------------
 async function searchSelver(query) {
     try {
-        const url = `https://www.selver.ee/search?q=${encodeURIComponent(query)}`;
-        console.log(`🔍 Otsin Selverist: ${query}`);
+        const encodedQuery = encodeURIComponent(query);
+        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&render=true&wait_for=.product-item&wait_for=5000&country_code=ee`;
 
-        const response = await requestWithProxy(url);
-        if (!response) {
-            console.log('❌ Selver - ükski proxy ei töötanud');
+        console.log(`🔍 Otsin Selverist ScraperAPI renderdusega: ${query}`);
+
+        const response = await axios.get(url, {
+            timeout: 60000,
+            headers: {
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            }
+        });
+
+        if (!response.data || response.data.length < 10000) {
+            console.log('⚠️ Selver ScraperAPI: vastus liiga väike');
             return [];
         }
 
-        const $ = cheerio.load(response.data);
-        const products = [];
-        const seen = new Set();
-
-        let items = $('[data-product-id], .product-item, .product-tile, .product-list__item');
-        if (items.length === 0) {
-            items = $('a[href*="/toode/"], a[href*="/product/"]');
+        if (response.data.includes('Cloudflare') || response.data.includes('cf-browser-verification')) {
+            console.log('⚠️ ScraperAPI tagastas Cloudflare\'i lehe! Proovime uuesti...');
+            return await searchSelverFallback(query);
         }
 
-        items.each((index, element) => {
-            if (products.length >= 20) return false;
+        console.log(`✅ Selver ScraperAPI: leht laetud (${response.data.length} baiti)`);
+        return parseSelverHtml(response.data);
 
-            try {
-                const $item = $(element);
-                let name = $item.find('.product-name, .name, .product-title, h2, h3').first().text().trim();
-                if (!name) name = $item.text().trim();
-                if (!name || name.length < 3) return;
+    } catch (error) {
+        console.log(`❌ Selver ScraperAPI viga: ${error.message}`);
+        return await searchSelverFallback(query);
+    }
+}
 
-                const nameKey = name.toLowerCase().slice(0, 40);
-                if (seen.has(nameKey)) return;
-                seen.add(nameKey);
+// ----------------------------
+// SELVER - VARUVARIANT
+// ----------------------------
+async function searchSelverFallback(query) {
+    try {
+        console.log(`🔄 Proovin Selverit ilma renderduseta...`);
+        const encodedQuery = encodeURIComponent(query);
+        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&country_code=ee`;
 
-                let price = null;
-                const priceText = $item.find('.price, .product-price, .price-value, .final-price').first().text().trim();
-                if (priceText) {
-                    const match = priceText.match(/(\d+[.,]\d{2})\s*€?/);
-                    if (match) {
-                        price = parseFloat(match[1].replace(',', '.'));
-                    }
-                }
-
-                if (!price) {
-                    const fullText = $item.text();
-                    const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
-                    if (matches && matches.length > 0) {
-                        const match = matches[0].match(/(\d+[.,]\d{2})/);
-                        if (match) price = parseFloat(match[1].replace(',', '.'));
-                    }
-                }
-
-                let url = '';
-                const link = $item.find('a[href]').first();
-                if (link.length > 0) {
-                    let href = link.attr('href');
-                    if (href) {
-                        if (href.startsWith('http')) {
-                            url = href;
-                        } else {
-                            url = `https://www.selver.ee${href}`;
-                        }
-                    }
-                }
-
-                products.push({
-                    name: name.slice(0, 200),
-                    price_eur: price,
-                    url: url,
-                    store: 'Selver'
-                });
-            } catch (error) {}
+        const response = await axios.get(url, {
+            timeout: 30000
         });
 
-        console.log(`✅ Selver: ${products.length} toodet`);
-        return products;
-
+        if (response.data && response.data.length > 5000) {
+            return parseSelverHtml(response.data);
+        }
+        return [];
     } catch (error) {
-        console.log(`❌ Selver viga: ${error.message}`);
+        console.log(`❌ Selver fallback viga: ${error.message}`);
         return [];
     }
 }
 
 // ----------------------------
-// PRISMA (PROXYGA)
+// PARSE SELVER HTML
 // ----------------------------
-async function searchPrisma(query) {
-    try {
-        const url = `https://www.prisma.ee/et/otsing?q=${encodeURIComponent(query)}`;
-        const response = await requestWithProxy(url);
-        if (!response) return [];
+function parseSelverHtml(html) {
+    const $ = cheerio.load(html);
+    const products = [];
+    const seen = new Set();
 
-        const $ = cheerio.load(response.data);
-        const products = [];
-        const seen = new Set();
+    const selectors = [
+        '[data-product-id]',
+        '.product-item',
+        '.product-tile',
+        '.product-list__item',
+        '.product',
+        '.search-result-item',
+        '.product-card',
+        '.product-box',
+        'article.product',
+        'div[class*="product"]'
+    ];
 
-        let items = $('.product-item, .product, .product-tile, [data-product-id]');
-        if (items.length === 0) {
-            items = $('a[href*="/toode/"], a[href*="/product/"]');
+    let items = $();
+    for (const selector of selectors) {
+        const found = $(selector);
+        if (found.length > 0) {
+            items = found;
+            console.log(`✅ Leitud ${found.length} elementi selektoriga: ${selector}`);
+            break;
         }
+    }
 
-        items.each((index, element) => {
-            if (products.length >= 20) return false;
+    if (items.length === 0) {
+        items = $('a[href*="/toode/"], a[href*="/product/"]');
+        console.log(`🔗 Leitud ${items.length} linki toodetele`);
+    }
 
-            try {
-                const $item = $(element);
-                let name = $item.find('.product-name, .name, .title, .product-title, h2, h3').first().text().trim();
-                if (!name) name = $item.text().trim();
-                if (!name || name.length < 3) return;
-
-                const nameKey = name.toLowerCase().slice(0, 40);
-                if (seen.has(nameKey)) return;
-                seen.add(nameKey);
-
-                let price = null;
-                const priceText = $item.find('.price, .product-price, .price-value, .amount').first().text().trim();
-                if (priceText) {
-                    const match = priceText.match(/(\d+[.,]\d{2})\s*€?/);
-                    if (match) {
-                        price = parseFloat(match[1].replace(',', '.'));
-                    }
-                }
-
-                if (!price) {
-                    const fullText = $item.text();
-                    const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
-                    if (matches && matches.length > 0) {
-                        const match = matches[0].match(/(\d+[.,]\d{2})/);
-                        if (match) price = parseFloat(match[1].replace(',', '.'));
-                    }
-                }
-
-                let url = '';
-                const link = $item.find('a[href]').first();
-                if (link.length > 0) {
-                    let href = link.attr('href');
-                    if (href) {
-                        if (href.startsWith('http')) {
-                            url = href;
-                        } else {
-                            url = `https://www.prisma.ee${href}`;
-                        }
-                    }
-                }
-
-                products.push({
-                    name: name.slice(0, 200),
-                    price_eur: price,
-                    url: url,
-                    store: 'Prisma'
-                });
-            } catch (error) {}
+    if (items.length === 0) {
+        const allLinks = $('a[href]');
+        allLinks.each((i, el) => {
+            const text = $(el).text().trim();
+            if (text.length > 10 && text.length < 100) {
+                items = items.add(el);
+            }
         });
-
-        console.log(`✅ Prisma: ${products.length} toodet`);
-        return products;
-    } catch (error) {
-        console.log(`❌ Prisma viga: ${error.message}`);
-        return [];
+        console.log(`🔗 Leitud ${items.length} potentsiaalset tootelinki`);
     }
+
+    items.each((index, element) => {
+        if (products.length >= 20) return false;
+        try {
+            const $item = $(element);
+            let name = $item.find('.product-name, .name, .product-title, h2, h3, .title, .product-title, [data-testid="product-name"]').first().text().trim();
+            if (!name) name = $item.text().trim();
+            if (!name || name.length < 3) return;
+
+            name = name.replace(/\s+/g, ' ').trim();
+
+            const nameKey = name.toLowerCase().slice(0, 40);
+            if (seen.has(nameKey)) return;
+            seen.add(nameKey);
+
+            let price = null;
+            const priceSelectors = ['.price', '.product-price', '.price-value', '.final-price', '.amount', '.product-price__price', '[data-testid="product-price"]'];
+            let priceText = '';
+            for (const ps of priceSelectors) {
+                const pEl = $item.find(ps).first();
+                if (pEl.length > 0) {
+                    priceText = pEl.text().trim();
+                    break;
+                }
+            }
+            if (priceText) {
+                const match = priceText.match(/(\d+[.,]\d{2})\s*€?/);
+                if (match) {
+                    price = parseFloat(match[1].replace(',', '.'));
+                }
+            }
+            if (!price) {
+                const fullText = $item.text();
+                const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
+                if (matches && matches.length > 0) {
+                    const match = matches[0].match(/(\d+[.,]\d{2})/);
+                    if (match) price = parseFloat(match[1].replace(',', '.'));
+                }
+            }
+
+            let url = '';
+            const link = $item.find('a[href]').first();
+            if (link.length > 0) {
+                let href = link.attr('href');
+                if (href) {
+                    if (href.startsWith('http')) {
+                        url = href;
+                    } else {
+                        url = `https://www.selver.ee${href}`;
+                    }
+                }
+            }
+
+            products.push({
+                name: name.slice(0, 200),
+                price_eur: price,
+                url: url,
+                store: 'Selver'
+            });
+        } catch (error) {}
+    });
+
+    console.log(`✅ Selver: ${products.length} toodet`);
+    return products;
 }
 
 // ----------------------------
-// MAXIMA (PROXYGA)
-// ----------------------------
-async function searchMaxima(query) {
-    try {
-        const url = `https://www.maxima.ee/et/search?q=${encodeURIComponent(query)}`;
-        const response = await requestWithProxy(url);
-        if (!response) return [];
-
-        const $ = cheerio.load(response.data);
-        const products = [];
-        const seen = new Set();
-
-        let items = $('.product-item, .product, .product-card, [data-product-id]');
-        if (items.length === 0) {
-            items = $('a[href*="/toode/"], a[href*="/product/"]');
-        }
-
-        items.each((index, element) => {
-            if (products.length >= 20) return false;
-
-            try {
-                const $item = $(element);
-                let name = $item.find('.product-name, .name, .title, .product-title, h2, h3').first().text().trim();
-                if (!name) name = $item.text().trim();
-                if (!name || name.length < 3) return;
-
-                const nameKey = name.toLowerCase().slice(0, 40);
-                if (seen.has(nameKey)) return;
-                seen.add(nameKey);
-
-                let price = null;
-                const priceText = $item.find('.price, .product-price, .price-value, .amount').first().text().trim();
-                if (priceText) {
-                    const match = priceText.match(/(\d+[.,]\d{2})\s*€?/);
-                    if (match) {
-                        price = parseFloat(match[1].replace(',', '.'));
-                    }
-                }
-
-                if (!price) {
-                    const fullText = $item.text();
-                    const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
-                    if (matches && matches.length > 0) {
-                        const match = matches[0].match(/(\d+[.,]\d{2})/);
-                        if (match) price = parseFloat(match[1].replace(',', '.'));
-                    }
-                }
-
-                let url = '';
-                const link = $item.find('a[href]').first();
-                if (link.length > 0) {
-                    let href = link.attr('href');
-                    if (href) {
-                        if (href.startsWith('http')) {
-                            url = href;
-                        } else {
-                            url = `https://www.maxima.ee${href}`;
-                        }
-                    }
-                }
-
-                products.push({
-                    name: name.slice(0, 200),
-                    price_eur: price,
-                    url: url,
-                    store: 'Maxima'
-                });
-            } catch (error) {}
-        });
-
-        console.log(`✅ Maxima: ${products.length} toodet`);
-        return products;
-    } catch (error) {
-        console.log(`❌ Maxima viga: ${error.message}`);
-        return [];
-    }
-}
-
-// ----------------------------
-// RIMI (PROXYGA)
-// ----------------------------
-async function searchRimi(query) {
-    try {
-        const url = `https://www.rimi.ee/api/products?search=${encodeURIComponent(query)}&limit=20`;
-        const headers = { ...HEADERS, 'Accept': 'application/json' };
-        const response = await requestWithProxy(url, headers);
-        if (!response) return [];
-
-        const data = response.data;
-        const products = [];
-
-        let items = [];
-        if (Array.isArray(data)) {
-            items = data;
-        } else if (data && typeof data === 'object') {
-            items = data.products || data.data || data.items || [];
-        }
-
-        for (const item of items.slice(0, 20)) {
-            try {
-                if (typeof item !== 'object') continue;
-                const name = item.name || item.title || item.product_name;
-                if (!name) continue;
-
-                let price = null;
-                if (item.price !== undefined && item.price !== null) {
-                    price = item.price;
-                } else if (item.prices && typeof item.prices === 'object') {
-                    price = item.prices.price || item.prices.final_price;
-                }
-
-                if (price) {
-                    if (typeof price === 'string') {
-                        price = parseFloat(price.replace(',', '.'));
-                    } else if (typeof price === 'number' && price > 100) {
-                        price = price / 100;
-                    }
-                }
-
-                const url = item.url || item.permalink || item.link || '';
-                products.push({
-                    name: name.slice(0, 200),
-                    price_eur: price,
-                    url: url,
-                    store: 'Rimi'
-                });
-            } catch (error) {}
-        }
-
-        console.log(`✅ Rimi: ${products.length} toodet`);
-        return products;
-    } catch (error) {
-        console.log(`❌ Rimi viga: ${error.message}`);
-        return [];
-    }
-}
-
-// ----------------------------
-// API ENDPOINTID
+// FRONTEND
 // ----------------------------
 app.get('/', (req, res) => {
     res.send(`
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Eesti poodide hinnavõrdlus</title>
+            <title>Coop & Selver hinnavõrdlus</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
+                body { font-family: Arial, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; }
                 h1 { color: #333; }
                 .search-box { display: flex; gap: 10px; margin: 20px 0; }
                 input { flex: 1; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 8px; }
                 button { padding: 10px 30px; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; }
                 button:hover { background: #0056b3; }
                 #results { margin-top: 20px; }
-                .store { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #007bff; }
-                .store h2 { margin: 0 0 10px 0; font-size: 18px; }
+                .store-section { margin: 15px 0; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff; }
+                .store-section.coop { border-left-color: #28a745; }
+                .store-section.selver { border-left-color: #dc3545; }
+                .store-section h2 { margin: 0 0 10px 0; font-size: 18px; }
                 .product { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee; }
                 .product:last-child { border-bottom: none; }
                 .price { font-weight: bold; color: #28a745; }
                 .loading { text-align: center; padding: 20px; display: none; }
-                .total { text-align: center; padding: 10px; background: #e9ecef; border-radius: 8px; margin: 10px 0; }
+                .total { background: #e9ecef; padding: 10px; border-radius: 8px; margin: 10px 0; text-align: center; }
+                .no-results { color: #999; font-style: italic; }
+                .store-grid {
+                    display: grid;
+                    grid-template-columns: 1fr 1fr;
+                    gap: 20px;
+                }
+                @media (max-width: 768px) {
+                    .store-grid { grid-template-columns: 1fr; }
+                }
             </style>
         </head>
         <body>
-            <h1>🛒 Eesti poodide hinnavõrdlus</h1>
-            <p>Coop · Selver · Prisma · Maxima · Rimi</p>
-
+            <h1>🛒 Coop & Selver hinnavõrdlus</h1>
             <div class="search-box">
                 <input type="text" id="query" placeholder="Otsi toodet..." value="sai">
                 <button onclick="search()">🔍 Otsi</button>
             </div>
-
-            <div class="loading" id="loading">⏳ Otsin...</div>
+            <div class="loading" id="loading">⏳ Otsin tooteid...</div>
             <div id="results"></div>
-
             <script>
                 async function search() {
                     const query = document.getElementById('query').value || 'sai';
                     document.getElementById('loading').style.display = 'block';
                     document.getElementById('results').innerHTML = '';
-
                     try {
                         const response = await fetch(\`/search?q=\${encodeURIComponent(query)}\`);
                         const data = await response.json();
-
                         let html = \`<div class="total">📊 Leitud \${data.total_count || 0} toodet</div>\`;
-
+                        html += \`<div class="store-grid">\`;
+                        
                         for (const store of data.stores) {
-                            const hasProducts = store.count > 0;
-                            const borderColor = hasProducts ? '#28a745' : '#dc3545';
-                            const status = hasProducts ? '✅' : '❌';
-
-                            html += \`
-                                <div class="store" style="border-left-color: \${borderColor}">
-                                    <h2>🏪 \${store.name} (\${store.count}) \${status}</h2>
-                                    \${store.products && store.products.length > 0 ?
-                                        store.products.map(p => \`
-                                            <div class="product">
-                                                <span>\${p.name}</span>
-                                                <span class="price">\${p.price_eur ? \`\${p.price_eur.toFixed(2)} €\` : 'Hind puudub'}</span>
-                                            </div>
-                                        \`).join('')
-                                        : '<div>Tooteid ei leitud</div>'
-                                    }
-                                </div>
-                            \`;
+                            const cls = store.name === 'Coop' ? 'coop' : 'selver';
+                            html += \`<div class="store-section \${cls}"><h2>🏪 \${store.name} (\${store.count})</h2>\`;
+                            if (store.products && store.products.length > 0) {
+                                html += store.products.map(p => \`
+                                    <div class="product">
+                                        <span>\${p.name}</span>
+                                        <span class="price">\${p.price_eur ? \`\${p.price_eur.toFixed(2)} €\` : 'Hind puudub'}</span>
+                                    </div>
+                                \`).join('');
+                            } else {
+                                html += '<div class="no-results">Tooteid ei leitud</div>';
+                            }
+                            html += \`</div>\`;
                         }
-
+                        html += \`</div>\`;
                         document.getElementById('results').innerHTML = html;
                     } catch (error) {
                         document.getElementById('results').innerHTML = '<div style="color:red;">❌ Viga: ' + error.message + '</div>';
                     }
-
                     document.getElementById('loading').style.display = 'none';
                 }
-
                 document.getElementById('query').addEventListener('keypress', (e) => {
                     if (e.key === 'Enter') search();
                 });
-
                 window.onload = search;
             </script>
         </body>
@@ -539,6 +331,9 @@ app.get('/', (req, res) => {
     `);
 });
 
+// ----------------------------
+// API ENDPOINT
+// ----------------------------
 app.get('/search', async (req, res) => {
     const query = req.query.q || 'sai';
     console.log(`\n${'='.repeat(50)}`);
@@ -554,9 +349,6 @@ app.get('/search', async (req, res) => {
     const stores = [
         { name: 'Coop', fn: searchCoop },
         { name: 'Selver', fn: searchSelver },
-        { name: 'Prisma', fn: searchPrisma },
-        { name: 'Maxima', fn: searchMaxima },
-        { name: 'Rimi', fn: searchRimi },
     ];
 
     for (const store of stores) {
@@ -600,4 +392,5 @@ app.get('/ping', (req, res) => {
 // ----------------------------
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server käivitub pordil: ${PORT}`);
+    console.log(`🔗 http://localhost:${PORT}`);
 });

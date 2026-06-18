@@ -10,10 +10,9 @@ app.use(cors());
 app.use(express.json());
 
 // ----------------------------
-// API VÕTMED
+// SCRAPERAPI VÕTI
 // ----------------------------
 const SCRAPER_API_KEY = '18ab58b0d0b512941eaf40ceb2d66ac5';
-const ZENROWS_API_KEY = 'be40eedf6b67af846ae836320a8a0c161001e265'; // kui on
 
 // ----------------------------
 // PÄISED
@@ -63,6 +62,34 @@ async function searchCoop(query) {
 }
 
 // ----------------------------
+// SELVER – SCRAPERAPI (KIIRE, ILMA RENDERDUSETA)
+// ----------------------------
+async function searchSelver(query) {
+    try {
+        const encodedQuery = encodeURIComponent(query);
+        // Ära kasuta render=true – see võtab liiga kaua aega!
+        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&country_code=ee`;
+        console.log(`🔍 Selver ScraperAPI (kiire): ${query}`);
+
+        const response = await axios.get(url, {
+            timeout: 20000
+        });
+
+        if (!response.data || response.data.length < 10000) {
+            console.log('⚠️ Selver: vastus liiga väike');
+            return [];
+        }
+
+        console.log(`✅ Selver: leht laetud (${response.data.length} baiti)`);
+        return parseSelverHtml(response.data);
+
+    } catch (error) {
+        console.log(`❌ Selver viga: ${error.message}`);
+        return [];
+    }
+}
+
+// ----------------------------
 // PARSE SELVER HTML
 // ----------------------------
 function parseSelverHtml(html) {
@@ -70,7 +97,7 @@ function parseSelverHtml(html) {
     const products = [];
     const seen = new Set();
 
-    // Selveri tootekaardid – need on kõige levinumad klassid
+    // Selveri tootekaardid
     const selectors = [
         '[data-product-id]',
         '.product-item',
@@ -164,84 +191,6 @@ function parseSelverHtml(html) {
 
     console.log(`✅ Selver: ${products.length} toodet`);
     return products;
-}
-
-// ----------------------------
-// SELVER – SCRAPERAPI (PREMIUM + RENDER)
-// ----------------------------
-async function searchSelverScraperAPI(query) {
-    try {
-        const encodedQuery = encodeURIComponent(query);
-        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&render=true&wait_for=.product-item&wait=3000&premium=true&country_code=ee`;
-        console.log(`🔍 Selver ScraperAPI (premium render): ${query}`);
-
-        const response = await axios.get(url, {
-            timeout: 25000 // 25 sekundit – mahub Renderi limiiti
-        });
-
-        if (!response.data || response.data.length < 10000) {
-            console.log('⚠️ ScraperAPI: vastus liiga väike');
-            return [];
-        }
-
-        console.log(`✅ ScraperAPI: leht laetud (${response.data.length} baiti)`);
-        return parseSelverHtml(response.data);
-
-    } catch (error) {
-        console.log(`❌ ScraperAPI viga: ${error.message}`);
-        return [];
-    }
-}
-
-// ----------------------------
-// SELVER – ZENROWS (KUI SCRAPERAPI EI TÖÖTA)
-// ----------------------------
-async function searchSelverZenRows(query) {
-    try {
-        const targetUrl = `https://www.selver.ee/search?q=${encodeURIComponent(query)}`;
-        console.log(`🔍 Selver ZenRows: ${query}`);
-
-        const response = await axios({
-            url: 'https://api.zenrows.com/v1/',
-            method: 'GET',
-            params: {
-                url: targetUrl,
-                apikey: ZENROWS_API_KEY,
-                js_render: 'true',
-                wait_for: '.product-item',
-                wait: '3000',
-                premium_proxy: 'true',
-                country: 'ee'
-            },
-            timeout: 25000
-        });
-
-        if (response.data && response.data.length > 10000) {
-            return parseSelverHtml(response.data);
-        }
-        return [];
-    } catch (error) {
-        console.log(`❌ ZenRows viga: ${error.message}`);
-        return [];
-    }
-}
-
-// ----------------------------
-// SELVER – PEAMINE (PROOVIB KÕIKI)
-// ----------------------------
-async function searchSelver(query) {
-    // 1. Proovi ScraperAPI premium-ga
-    let products = await searchSelverScraperAPI(query);
-    if (products.length > 0) return products;
-
-    // 2. Proovi ZenRowsi (kui on API võti)
-    if (ZENROWS_API_KEY && ZENROWS_API_KEY !== 'SINU_VOTI') {
-        products = await searchSelverZenRows(query);
-        if (products.length > 0) return products;
-    }
-
-    console.log('❌ Selver – ükski meetod ei töötanud');
-    return [];
 }
 
 // ----------------------------

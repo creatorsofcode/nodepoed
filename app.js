@@ -6,13 +6,14 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ----------------------------
-// ZENROWS API VÕTI
-// ----------------------------
-const ZENROWS_API_KEY = 'be40eedf6b67af846ae836320a8a0c161001e265';
-
 app.use(cors());
 app.use(express.json());
+
+// ----------------------------
+// API VÕTMED
+// ----------------------------
+const SCRAPER_API_KEY = '18ab58b0d0b512941eaf40ceb2d66ac5';
+const ZENROWS_API_KEY = 'be40eedf6b67af846ae836320a8a0c161001e265'; // kui on
 
 // ----------------------------
 // PÄISED
@@ -24,7 +25,7 @@ const HEADERS = {
 };
 
 // ----------------------------
-// COOP
+// COOP (API, TÖÖTAB ALATI)
 // ----------------------------
 async function searchCoop(query) {
     try {
@@ -34,78 +35,29 @@ async function searchCoop(query) {
             timeout: 15000
         });
 
-        if (response.status !== 200 || !Array.isArray(response.data)) {
-            return [];
-        }
+        if (response.status !== 200 || !Array.isArray(response.data)) return [];
 
         const products = [];
         for (const item of response.data.slice(0, 20)) {
             try {
                 const name = item.name || '';
                 if (!name) continue;
-
                 const prices = item.prices || {};
                 const rawPrice = prices.price;
                 const minorUnit = prices.currency_minor_unit || 2;
-
-                let priceEur = null;
-                if (rawPrice !== undefined && rawPrice !== null) {
-                    priceEur = parseInt(rawPrice) / Math.pow(10, minorUnit);
-                }
-
+                let priceEur = rawPrice !== undefined && rawPrice !== null ? parseInt(rawPrice) / Math.pow(10, minorUnit) : null;
                 products.push({
                     name: name.slice(0, 200),
                     price_eur: priceEur,
                     url: item.permalink || '',
                     store: 'Coop'
                 });
-            } catch (error) {
-                continue;
-            }
+            } catch (e) { continue; }
         }
-
         console.log(`✅ Coop: ${products.length} toodet`);
         return products;
     } catch (error) {
         console.log(`❌ Coop viga: ${error.message}`);
-        return [];
-    }
-}
-
-// ----------------------------
-// SELVER - ZENROWS
-// ----------------------------
-async function searchSelver(query) {
-    try {
-        const encodedQuery = encodeURIComponent(query);
-        const targetUrl = `https://www.selver.ee/search?q=${encodedQuery}`;
-        
-        // ZenRows päringu parameetrid
-        const params = {
-            apikey: ZENROWS_API_KEY,
-            url: targetUrl,
-            js_render: true,          // renderdab JavaScripti
-            wait_for: '.product-item', // ootab, kuni tooted ilmuvad
-            wait_for_time: 3000,       // ootab kuni 3 sekundit
-            premium_proxy: false,      // kasuta tasuta proksysid
-            country: 'ee'              // Eesti IP
-        };
-
-        console.log(`🔍 Otsin Selverist ZenRows-ga: ${query}`);
-
-        const response = await axios.get('https://api.zenrows.com/v1/', {
-            params: params,
-            timeout: 30000 // 30 sekundit – mahub Renderi limiiti
-        });
-
-        if (response.data && response.data.length > 10000) {
-            console.log(`✅ Selver ZenRows: leht laetud (${response.data.length} baiti)`);
-            return parseSelverHtml(response.data);
-        }
-        console.log('⚠️ Selver ZenRows: vastus liiga väike');
-        return [];
-    } catch (error) {
-        console.log(`❌ Selver ZenRows viga: ${error.message}`);
         return [];
     }
 }
@@ -118,17 +70,15 @@ function parseSelverHtml(html) {
     const products = [];
     const seen = new Set();
 
-    // Proovi kõiki võimalikke selektoreid
+    // Selveri tootekaardid – need on kõige levinumad klassid
     const selectors = [
         '[data-product-id]',
         '.product-item',
         '.product-tile',
         '.product-list__item',
         '.product',
-        '.search-result-item',
         '.product-card',
         '.product-box',
-        'article.product',
         'div[class*="product"]'
     ];
 
@@ -137,14 +87,14 @@ function parseSelverHtml(html) {
         const found = $(selector);
         if (found.length > 0) {
             items = found;
-            console.log(`✅ Leitud ${found.length} elementi selektoriga: ${selector}`);
+            console.log(`✅ Selver: leitud ${found.length} elementi selektoriga: ${selector}`);
             break;
         }
     }
 
     if (items.length === 0) {
         items = $('a[href*="/toode/"], a[href*="/product/"]');
-        console.log(`🔗 Leitud ${items.length} linki toodetele`);
+        console.log(`🔗 Selver: leitud ${items.length} linki toodetele`);
     }
 
     items.each((index, element) => {
@@ -153,14 +103,12 @@ function parseSelverHtml(html) {
             const $item = $(element);
 
             // Nimi
-            let name = $item.find('.product-name, .name, .product-title, h2, h3, .title, .product-title, [data-testid="product-name"]').first().text().trim();
+            let name = $item.find('.product-name, .name, .product-title, h2, h3, .title, [data-testid="product-name"]').first().text().trim();
             if (!name) name = $item.find('a[href*="/toode/"]').first().text().trim();
-            if (!name) name = $item.find('a[href*="/product/"]').first().text().trim();
             if (!name) name = $item.text().trim();
-
             if (!name || name.length < 3) return;
-            name = name.replace(/\s+/g, ' ').trim();
 
+            name = name.replace(/\s+/g, ' ').trim();
             const nameKey = name.toLowerCase().slice(0, 40);
             if (seen.has(nameKey)) return;
             seen.add(nameKey);
@@ -176,17 +124,18 @@ function parseSelverHtml(html) {
                     break;
                 }
             }
-            if (!priceText) {
+            if (priceText) {
+                const match = priceText.match(/(\d+[.,]\d{2})\s*€?/);
+                if (match) {
+                    price = parseFloat(match[1].replace(',', '.'));
+                }
+            }
+            if (!price) {
                 const fullText = $item.text();
                 const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
                 if (matches && matches.length > 0) {
-                    priceText = matches[0];
-                }
-            }
-            if (priceText) {
-                const match = priceText.match(/(\d+[.,]\d{2})/);
-                if (match) {
-                    price = parseFloat(match[1].replace(',', '.'));
+                    const match = matches[0].match(/(\d+[.,]\d{2})/);
+                    if (match) price = parseFloat(match[1].replace(',', '.'));
                 }
             }
 
@@ -218,6 +167,84 @@ function parseSelverHtml(html) {
 }
 
 // ----------------------------
+// SELVER – SCRAPERAPI (PREMIUM + RENDER)
+// ----------------------------
+async function searchSelverScraperAPI(query) {
+    try {
+        const encodedQuery = encodeURIComponent(query);
+        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&render=true&wait_for=.product-item&wait=3000&premium=true&country_code=ee`;
+        console.log(`🔍 Selver ScraperAPI (premium render): ${query}`);
+
+        const response = await axios.get(url, {
+            timeout: 25000 // 25 sekundit – mahub Renderi limiiti
+        });
+
+        if (!response.data || response.data.length < 10000) {
+            console.log('⚠️ ScraperAPI: vastus liiga väike');
+            return [];
+        }
+
+        console.log(`✅ ScraperAPI: leht laetud (${response.data.length} baiti)`);
+        return parseSelverHtml(response.data);
+
+    } catch (error) {
+        console.log(`❌ ScraperAPI viga: ${error.message}`);
+        return [];
+    }
+}
+
+// ----------------------------
+// SELVER – ZENROWS (KUI SCRAPERAPI EI TÖÖTA)
+// ----------------------------
+async function searchSelverZenRows(query) {
+    try {
+        const targetUrl = `https://www.selver.ee/search?q=${encodeURIComponent(query)}`;
+        console.log(`🔍 Selver ZenRows: ${query}`);
+
+        const response = await axios({
+            url: 'https://api.zenrows.com/v1/',
+            method: 'GET',
+            params: {
+                url: targetUrl,
+                apikey: ZENROWS_API_KEY,
+                js_render: 'true',
+                wait_for: '.product-item',
+                wait: '3000',
+                premium_proxy: 'true',
+                country: 'ee'
+            },
+            timeout: 25000
+        });
+
+        if (response.data && response.data.length > 10000) {
+            return parseSelverHtml(response.data);
+        }
+        return [];
+    } catch (error) {
+        console.log(`❌ ZenRows viga: ${error.message}`);
+        return [];
+    }
+}
+
+// ----------------------------
+// SELVER – PEAMINE (PROOVIB KÕIKI)
+// ----------------------------
+async function searchSelver(query) {
+    // 1. Proovi ScraperAPI premium-ga
+    let products = await searchSelverScraperAPI(query);
+    if (products.length > 0) return products;
+
+    // 2. Proovi ZenRowsi (kui on API võti)
+    if (ZENROWS_API_KEY && ZENROWS_API_KEY !== 'SINU_VOTI') {
+        products = await searchSelverZenRows(query);
+        if (products.length > 0) return products;
+    }
+
+    console.log('❌ Selver – ükski meetod ei töötanud');
+    return [];
+}
+
+// ----------------------------
 // FRONTEND
 // ----------------------------
 app.get('/', (req, res) => {
@@ -225,43 +252,41 @@ app.get('/', (req, res) => {
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Coop & Selver hinnavõrdlus</title>
+            <title>Selver + Coop</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 900px; margin: 50px auto; padding: 20px; }
+                * { box-sizing: border-box; }
+                body { font-family: Arial; max-width: 1000px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
+                .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
                 h1 { color: #333; }
                 .search-box { display: flex; gap: 10px; margin: 20px 0; }
-                input { flex: 1; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 8px; }
-                button { padding: 10px 30px; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; }
+                input { flex: 1; padding: 12px 20px; font-size: 16px; border: 2px solid #ddd; border-radius: 8px; }
+                button { padding: 12px 30px; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; }
                 button:hover { background: #0056b3; }
                 #results { margin-top: 20px; }
-                .store-section { margin: 15px 0; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff; }
+                .store-section { margin: 15px 0; padding: 15px; border-radius: 8px; border-left: 4px solid #007bff; background: #f8f9fa; }
                 .store-section.coop { border-left-color: #28a745; }
                 .store-section.selver { border-left-color: #dc3545; }
-                .store-section h2 { margin: 0 0 10px 0; font-size: 18px; }
-                .product { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee; }
+                .store-section h2 { margin: 0; font-size: 18px; }
+                .product { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
                 .product:last-child { border-bottom: none; }
                 .price { font-weight: bold; color: #28a745; }
                 .loading { text-align: center; padding: 20px; display: none; }
                 .total { background: #e9ecef; padding: 10px; border-radius: 8px; margin: 10px 0; text-align: center; }
                 .no-results { color: #999; font-style: italic; }
-                .store-grid {
-                    display: grid;
-                    grid-template-columns: 1fr 1fr;
-                    gap: 20px;
-                }
-                @media (max-width: 768px) {
-                    .store-grid { grid-template-columns: 1fr; }
-                }
+                .store-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+                @media (max-width: 768px) { .store-grid { grid-template-columns: 1fr; } }
             </style>
         </head>
         <body>
-            <h1>🛒 Coop & Selver hinnavõrdlus</h1>
-            <div class="search-box">
-                <input type="text" id="query" placeholder="Otsi toodet..." value="sai">
-                <button onclick="search()">🔍 Otsi</button>
+            <div class="container">
+                <h1>🛒 Selver + Coop</h1>
+                <div class="search-box">
+                    <input type="text" id="query" placeholder="Otsi toodet..." value="sai">
+                    <button onclick="search()">🔍 Otsi</button>
+                </div>
+                <div class="loading" id="loading">⏳ Otsin...</div>
+                <div id="results"></div>
             </div>
-            <div class="loading" id="loading">⏳ Otsin tooteid...</div>
-            <div id="results"></div>
             <script>
                 async function search() {
                     const query = document.getElementById('query').value || 'sai';
@@ -273,7 +298,7 @@ app.get('/', (req, res) => {
                         let html = \`<div class="total">📊 Leitud \${data.total_count || 0} toodet</div>\`;
                         html += \`<div class="store-grid">\`;
                         for (const store of data.stores) {
-                            const cls = store.name === 'Coop' ? 'coop' : 'selver';
+                            const cls = store.name.toLowerCase();
                             html += \`<div class="store-section \${cls}"><h2>🏪 \${store.name} (\${store.count})</h2>\`;
                             if (store.products && store.products.length > 0) {
                                 html += store.products.map(p => \`
@@ -294,9 +319,7 @@ app.get('/', (req, res) => {
                     }
                     document.getElementById('loading').style.display = 'none';
                 }
-                document.getElementById('query').addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') search();
-                });
+                document.getElementById('query').addEventListener('keypress', (e) => { if (e.key === 'Enter') search(); });
                 window.onload = search;
             </script>
         </body>
@@ -309,9 +332,7 @@ app.get('/', (req, res) => {
 // ----------------------------
 app.get('/search', async (req, res) => {
     const query = req.query.q || 'sai';
-    console.log(`\n${'='.repeat(50)}`);
-    console.log(`📡 Päring: ${query}`);
-    console.log('='.repeat(50));
+    console.log(`\n📡 Päring: ${query}`);
 
     const results = {
         query: query,
@@ -319,42 +340,34 @@ app.get('/search', async (req, res) => {
         total_count: 0
     };
 
-    // Coop ja Selver paralleelselt
-    const [coopProducts, selverProducts] = await Promise.all([
-        searchCoop(query),
-        searchSelver(query)
+    // Selver + Coop paralleelselt
+    const [selverProducts, coopProducts] = await Promise.all([
+        searchSelver(query),
+        searchCoop(query)
     ]);
+
+    if (selverProducts.length > 0) {
+        results.stores.push({
+            name: 'Selver',
+            count: selverProducts.length,
+            products: selverProducts
+        });
+        results.total_count += selverProducts.length;
+    }
 
     results.stores.push({
         name: 'Coop',
         count: coopProducts.length,
-        products: coopProducts,
-        time: '0s'
+        products: coopProducts
     });
     results.total_count += coopProducts.length;
-
-    results.stores.push({
-        name: 'Selver',
-        count: selverProducts.length,
-        products: selverProducts,
-        time: '0s'
-    });
-    results.total_count += selverProducts.length;
 
     res.json(results);
 });
 
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
-});
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/ping', (req, res) => res.send('OK'));
 
-app.get('/ping', (req, res) => {
-    res.send('OK');
-});
-
-// ----------------------------
-// KÄIVITUS
-// ----------------------------
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server käivitub pordil: ${PORT}`);
 });

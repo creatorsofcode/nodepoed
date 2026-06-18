@@ -19,26 +19,32 @@ const HEADERS = {
 };
 
 // ----------------------------
-// PROXY LIST
+// PROXY LIST (värskendatud)
 // ----------------------------
 function getProxyList() {
     return [
-        'http://37.49.224.15:3128',
-        'http://5.45.126.128:8080',
-        'http://85.192.61.93:7443',
-        'http://91.107.182.124:82',
-        'http://138.124.114.42:7443',
-        'http://89.169.53.40:7443',
-        'http://213.165.42.185:7443',
-        'http://79.137.205.130:7443',
-        'http://64.188.77.26:3128',
-        'http://88.210.21.224:1080',
-        'http://207.246.234.115:4669',
-        'http://209.141.46.220:9091',
-        'http://174.138.119.88:80',
-        'http://92.119.56.37:5555',
-        'http://217.174.244.117:3129',
-        'http://62.60.149.161:3128',
+        'http://37.49.224.15:3128',     // Eesti
+        'http://45.88.174.195:8080',    // Holland
+        'http://5.161.50.82:8118',      // USA
+        'http://159.223.87.50:443',     // Singapur
+        'http://8.219.97.248:80',       // Singapur
+        'http://47.91.29.151:33427',    // Jaapan
+        'http://47.237.107.41:1080',    // Singapur
+        'http://47.91.110.148:8008',    // Araabia
+        'http://85.192.61.93:7443',     // Soome
+        'http://91.107.182.124:82',     // Saksamaa
+        'http://138.124.114.42:7443',   // Saksamaa
+        'http://89.169.53.40:7443',     // Saksamaa
+        'http://213.165.42.185:7443',   // Saksamaa
+        'http://79.137.205.130:7443',   // Holland
+        'http://64.188.77.26:3128',     // Holland
+        'http://88.210.21.224:1080',    // Holland
+        'http://207.246.234.115:4669',  // USA
+        'http://209.141.46.220:9091',   // USA
+        'http://174.138.119.88:80',     // USA
+        'http://92.119.56.37:5555',     // Prantsusmaa
+        'http://217.174.244.117:3129',  // Suurbritannia
+        'http://62.60.149.161:3128',    // Rootsi
     ];
 }
 
@@ -70,6 +76,7 @@ async function requestWithProxy(url, headers = HEADERS, timeout = 15000) {
         }
     }
     
+    // Kui ükski proxy ei tööta, proovi ilma proxyta
     try {
         const response = await axios.get(url, {
             headers: headers,
@@ -437,7 +444,7 @@ async function searchRimi(query) {
 }
 
 // ----------------------------
-// API ENDPOINT
+// API ENDPOINTID
 // ----------------------------
 app.get('/', (req, res) => {
     res.send(`

@@ -34,25 +34,36 @@ async function searchCoop(query) {
             timeout: 15000
         });
 
-        if (response.status !== 200 || !Array.isArray(response.data)) return [];
+        if (response.status !== 200 || !Array.isArray(response.data)) {
+            return [];
+        }
 
         const products = [];
         for (const item of response.data.slice(0, 20)) {
             try {
                 const name = item.name || '';
                 if (!name) continue;
+
                 const prices = item.prices || {};
                 const rawPrice = prices.price;
                 const minorUnit = prices.currency_minor_unit || 2;
-                let priceEur = rawPrice !== undefined && rawPrice !== null ? parseInt(rawPrice) / Math.pow(10, minorUnit) : null;
+
+                let priceEur = null;
+                if (rawPrice !== undefined && rawPrice !== null) {
+                    priceEur = parseInt(rawPrice) / Math.pow(10, minorUnit);
+                }
+
                 products.push({
                     name: name.slice(0, 200),
                     price_eur: priceEur,
                     url: item.permalink || '',
                     store: 'Coop'
                 });
-            } catch (e) { continue; }
+            } catch (e) {
+                continue;
+            }
         }
+
         console.log(`✅ Coop: ${products.length} toodet`);
         return products;
     } catch (error) {
@@ -67,7 +78,6 @@ async function searchCoop(query) {
 async function searchSelver(query) {
     try {
         const encodedQuery = encodeURIComponent(query);
-        // Ära kasuta render=true – see võtab liiga kaua aega!
         const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&country_code=ee`;
         console.log(`🔍 Selver ScraperAPI (kiire): ${query}`);
 
@@ -97,7 +107,6 @@ function parseSelverHtml(html) {
     const products = [];
     const seen = new Set();
 
-    // Selveri tootekaardid
     const selectors = [
         '[data-product-id]',
         '.product-item',
@@ -289,11 +298,18 @@ app.get('/search', async (req, res) => {
         total_count: 0
     };
 
-    // Selver + Coop paralleelselt
-    const [selverProducts, coopProducts] = await Promise.all([
-        searchSelver(query),
-        searchCoop(query)
+    // Coop ja Selver paralleelselt
+    const [coopProducts, selverProducts] = await Promise.all([
+        searchCoop(query),
+        searchSelver(query)
     ]);
+
+    results.stores.push({
+        name: 'Coop',
+        count: coopProducts.length,
+        products: coopProducts
+    });
+    results.total_count += coopProducts.length;
 
     if (selverProducts.length > 0) {
         results.stores.push({
@@ -304,19 +320,15 @@ app.get('/search', async (req, res) => {
         results.total_count += selverProducts.length;
     }
 
-    results.stores.push({
-        name: 'Coop',
-        count: coopProducts.length,
-        products: coopProducts
-    });
-    results.total_count += coopProducts.length;
-
     res.json(results);
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/ping', (req, res) => res.send('OK'));
 
+// ----------------------------
+// KÄIVITUS
+// ----------------------------
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server käivitub pordil: ${PORT}`);
 });

@@ -7,9 +7,9 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 // ----------------------------
-// SCRAPERAPI VÕTI
+// ZENROWS API VÕTI
 // ----------------------------
-const SCRAPER_API_KEY = '18ab58b0d0b512941eaf40ceb2d66ac5';
+const ZENROWS_API_KEY = 'be40eedf6b67af846ae836320a8a0c161001e265';
 
 app.use(cors());
 app.use(express.json());
@@ -73,88 +73,52 @@ async function searchCoop(query) {
 }
 
 // ----------------------------
-// SELVER - KIIRE VERSIOON (ILMA RENDERDUSETA)
-// ----------------------------
-async function searchSelverFast(query) {
-    try {
-        const encodedQuery = encodeURIComponent(query);
-        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&country_code=ee`;
-        console.log(`🔍 Selver (kiire): ${query}`);
-
-        const response = await axios.get(url, {
-            timeout: 25000
-        });
-
-        if (response.data && response.data.length > 10000) {
-            return parseSelverHtml(response.data);
-        }
-        return [];
-    } catch (error) {
-        console.log(`⚠️ Selver kiire viga: ${error.message}`);
-        return [];
-    }
-}
-
-// ----------------------------
-// SELVER - RENDERDUSEGA (AEGLASEM, AGA TÄPSEM)
-// ----------------------------
-async function searchSelverRender(query) {
-    try {
-        const encodedQuery = encodeURIComponent(query);
-        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&render=true&wait_for=.product-item&wait_for=3000&country_code=ee`;
-        console.log(`🔍 Selver (renderdus): ${query}`);
-
-        const response = await axios.get(url, {
-            timeout: 45000
-        });
-
-        if (response.data && response.data.length > 10000) {
-            return parseSelverHtml(response.data);
-        }
-        return [];
-    } catch (error) {
-        console.log(`⚠️ Selver renderdus viga: ${error.message}`);
-        return [];
-    }
-}
-
-// ----------------------------
-// SELVER - PEAMINE (PROOVIB ESMAST KIIRET, SIIS RENDERDUST)
-// ----------------------------
-// ----------------------------
-// SELVER - RENDERI JAOKS (ILMA RENDERDUSETA)
+// SELVER - ZENROWS
 // ----------------------------
 async function searchSelver(query) {
     try {
         const encodedQuery = encodeURIComponent(query);
-        // Ära kasuta render=true Renderis – see võtab liiga kaua aega!
-        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&country_code=ee`;
-        console.log(`🔍 Otsin Selverist (Render): ${query}`);
+        const targetUrl = `https://www.selver.ee/search?q=${encodedQuery}`;
+        
+        // ZenRows päringu parameetrid
+        const params = {
+            apikey: ZENROWS_API_KEY,
+            url: targetUrl,
+            js_render: true,          // renderdab JavaScripti
+            wait_for: '.product-item', // ootab, kuni tooted ilmuvad
+            wait_for_time: 3000,       // ootab kuni 3 sekundit
+            premium_proxy: false,      // kasuta tasuta proksysid
+            country: 'ee'              // Eesti IP
+        };
 
-        const response = await axios.get(url, {
-            timeout: 25000 // 25 sekundit – mahub Renderi 30 sekundi sisse
+        console.log(`🔍 Otsin Selverist ZenRows-ga: ${query}`);
+
+        const response = await axios.get('https://api.zenrows.com/v1/', {
+            params: params,
+            timeout: 30000 // 30 sekundit – mahub Renderi limiiti
         });
 
         if (response.data && response.data.length > 10000) {
-            console.log(`✅ Selver: leht laetud (${response.data.length} baiti)`);
+            console.log(`✅ Selver ZenRows: leht laetud (${response.data.length} baiti)`);
             return parseSelverHtml(response.data);
         }
-        console.log('⚠️ Selver: vastus liiga väike');
+        console.log('⚠️ Selver ZenRows: vastus liiga väike');
         return [];
     } catch (error) {
-        console.log(`❌ Selver viga: ${error.message}`);
+        console.log(`❌ Selver ZenRows viga: ${error.message}`);
         return [];
     }
 }
+
 // ----------------------------
-// PARSE SELVER HTML (PARANDATUD)
+// PARSE SELVER HTML
 // ----------------------------
 function parseSelverHtml(html) {
     const $ = cheerio.load(html);
     const products = [];
     const seen = new Set();
 
-    // 1. Otsi kõik võimalikud tootekonteinerid
+    // Proovi kõiki võimalikke selektoreid
     const selectors = [
         '[data-product-id]',
         '.product-item',
@@ -178,48 +142,30 @@ function parseSelverHtml(html) {
         }
     }
 
-    // Kui ei leia, proovi linke
     if (items.length === 0) {
         items = $('a[href*="/toode/"], a[href*="/product/"]');
         console.log(`🔗 Leitud ${items.length} linki toodetele`);
     }
 
-    // Kui ikka ei leia, võta kõik lingid, mis sisaldavad rohkem kui 10 tähemärki teksti
-    if (items.length === 0) {
-        const allLinks = $('a[href]');
-        allLinks.each((i, el) => {
-            const text = $(el).text().trim();
-            if (text.length > 10 && text.length < 150) {
-                items = items.add(el);
-            }
-        });
-        console.log(`🔗 Leitud ${items.length} potentsiaalset tootelinki`);
-    }
-
-    // Käi läbi kõik elemendid
     items.each((index, element) => {
         if (products.length >= 20) return false;
         try {
             const $item = $(element);
 
-            // Proovi nime leida erinevatest kohtadest
+            // Nimi
             let name = $item.find('.product-name, .name, .product-title, h2, h3, .title, .product-title, [data-testid="product-name"]').first().text().trim();
             if (!name) name = $item.find('a[href*="/toode/"]').first().text().trim();
             if (!name) name = $item.find('a[href*="/product/"]').first().text().trim();
             if (!name) name = $item.text().trim();
 
-            // Kui nimi on liiga lühike või sisaldab ebavajalikke märke, jäta vahele
             if (!name || name.length < 3) return;
-
-            // Puhasta nimi (eemalda liigsed tühikud)
             name = name.replace(/\s+/g, ' ').trim();
 
-            // Väldi dubleerimist
             const nameKey = name.toLowerCase().slice(0, 40);
             if (seen.has(nameKey)) return;
             seen.add(nameKey);
 
-            // Proovi hinda leida
+            // Hind
             let price = null;
             const priceSelectors = ['.price', '.product-price', '.price-value', '.final-price', '.amount', '.product-price__price', '[data-testid="product-price"]'];
             let priceText = '';
@@ -231,7 +177,6 @@ function parseSelverHtml(html) {
                 }
             }
             if (!priceText) {
-                // Otsi kogu tekstist
                 const fullText = $item.text();
                 const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
                 if (matches && matches.length > 0) {
@@ -245,7 +190,7 @@ function parseSelverHtml(html) {
                 }
             }
 
-            // Proovi URL leida
+            // URL
             let url = '';
             const link = $item.find('a[href]').first();
             if (link.length > 0) {
@@ -259,7 +204,6 @@ function parseSelverHtml(html) {
                 }
             }
 
-            // Lisa toode
             products.push({
                 name: name.slice(0, 200),
                 price_eur: price,
@@ -375,7 +319,7 @@ app.get('/search', async (req, res) => {
         total_count: 0
     };
 
-    // Proovi Coop ja Selver paralleelselt (kiirem)
+    // Coop ja Selver paralleelselt
     const [coopProducts, selverProducts] = await Promise.all([
         searchCoop(query),
         searchSelver(query)

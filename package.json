@@ -1,7 +1,7 @@
 {
-  "name": "coop-selver-vordlus",
+  "name": "coop-selver-zenrows",
   "version": "1.0.0",
-  "description": "Coop ja Selver hinnavõrdlus",
+  "description": "Coop ja Selver ZenRows-ga",
   "main": "app.js",
   "scripts": {
     "start": "node app.js"

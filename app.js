@@ -121,25 +121,31 @@ async function searchSelverRender(query) {
 // ----------------------------
 // SELVER - PEAMINE (PROOVIB ESMAST KIIRET, SIIS RENDERDUST)
 // ----------------------------
+// ----------------------------
+// SELVER - RENDERI JAOKS (ILMA RENDERDUSETA)
+// ----------------------------
 async function searchSelver(query) {
-    // 1. Proovi kiiret
-    let products = await searchSelverFast(query);
-    if (products.length > 0) {
-        console.log(`✅ Selver (kiire): ${products.length} toodet`);
-        return products;
-    }
+    try {
+        const encodedQuery = encodeURIComponent(query);
+        // Ära kasuta render=true Renderis – see võtab liiga kaua aega!
+        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&country_code=ee`;
+        console.log(`🔍 Otsin Selverist (Render): ${query}`);
 
-    // 2. Kui kiire ei tööta, proovi renderdust
-    products = await searchSelverRender(query);
-    if (products.length > 0) {
-        console.log(`✅ Selver (renderdus): ${products.length} toodet`);
-        return products;
-    }
+        const response = await axios.get(url, {
+            timeout: 25000 // 25 sekundit – mahub Renderi 30 sekundi sisse
+        });
 
-    console.log('❌ Selver - ükski meetod ei töötanud');
-    return [];
+        if (response.data && response.data.length > 10000) {
+            console.log(`✅ Selver: leht laetud (${response.data.length} baiti)`);
+            return parseSelverHtml(response.data);
+        }
+        console.log('⚠️ Selver: vastus liiga väike');
+        return [];
+    } catch (error) {
+        console.log(`❌ Selver viga: ${error.message}`);
+        return [];
+    }
 }
-
 // ----------------------------
 // PARSE SELVER HTML (PARANDATUD)
 // ----------------------------

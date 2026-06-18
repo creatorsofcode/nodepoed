@@ -24,7 +24,7 @@ const HEADERS = {
 };
 
 // ----------------------------
-// COOP (API, TÖÖTAB ALATI)
+// COOP
 // ----------------------------
 async function searchCoop(query) {
     try {
@@ -73,72 +73,82 @@ async function searchCoop(query) {
 }
 
 // ----------------------------
-// SELVER - SCRAPERAPI RENDERDUSEGA
+// SELVER - KIIRE VERSIOON (ILMA RENDERDUSETA)
 // ----------------------------
-async function searchSelver(query) {
+async function searchSelverFast(query) {
     try {
-        const encodedQuery = encodeURIComponent(query);
-        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&render=true&wait_for=.product-item&wait_for=5000&country_code=ee`;
-
-        console.log(`🔍 Otsin Selverist ScraperAPI renderdusega: ${query}`);
-
-        const response = await axios.get(url, {
-            timeout: 60000,
-            headers: {
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            }
-        });
-
-        if (!response.data || response.data.length < 10000) {
-            console.log('⚠️ Selver ScraperAPI: vastus liiga väike');
-            return [];
-        }
-
-        if (response.data.includes('Cloudflare') || response.data.includes('cf-browser-verification')) {
-            console.log('⚠️ ScraperAPI tagastas Cloudflare\'i lehe! Proovime uuesti...');
-            return await searchSelverFallback(query);
-        }
-
-        console.log(`✅ Selver ScraperAPI: leht laetud (${response.data.length} baiti)`);
-        return parseSelverHtml(response.data);
-
-    } catch (error) {
-        console.log(`❌ Selver ScraperAPI viga: ${error.message}`);
-        return await searchSelverFallback(query);
-    }
-}
-
-// ----------------------------
-// SELVER - VARUVARIANT
-// ----------------------------
-async function searchSelverFallback(query) {
-    try {
-        console.log(`🔄 Proovin Selverit ilma renderduseta...`);
         const encodedQuery = encodeURIComponent(query);
         const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&country_code=ee`;
+        console.log(`🔍 Selver (kiire): ${query}`);
 
         const response = await axios.get(url, {
-            timeout: 30000
+            timeout: 25000
         });
 
-        if (response.data && response.data.length > 5000) {
+        if (response.data && response.data.length > 10000) {
             return parseSelverHtml(response.data);
         }
         return [];
     } catch (error) {
-        console.log(`❌ Selver fallback viga: ${error.message}`);
+        console.log(`⚠️ Selver kiire viga: ${error.message}`);
         return [];
     }
 }
 
 // ----------------------------
-// PARSE SELVER HTML
+// SELVER - RENDERDUSEGA (AEGLASEM, AGA TÄPSEM)
+// ----------------------------
+async function searchSelverRender(query) {
+    try {
+        const encodedQuery = encodeURIComponent(query);
+        const url = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=https://www.selver.ee/search?q=${encodedQuery}&render=true&wait_for=.product-item&wait_for=3000&country_code=ee`;
+        console.log(`🔍 Selver (renderdus): ${query}`);
+
+        const response = await axios.get(url, {
+            timeout: 45000
+        });
+
+        if (response.data && response.data.length > 10000) {
+            return parseSelverHtml(response.data);
+        }
+        return [];
+    } catch (error) {
+        console.log(`⚠️ Selver renderdus viga: ${error.message}`);
+        return [];
+    }
+}
+
+// ----------------------------
+// SELVER - PEAMINE (PROOVIB ESMAST KIIRET, SIIS RENDERDUST)
+// ----------------------------
+async function searchSelver(query) {
+    // 1. Proovi kiiret
+    let products = await searchSelverFast(query);
+    if (products.length > 0) {
+        console.log(`✅ Selver (kiire): ${products.length} toodet`);
+        return products;
+    }
+
+    // 2. Kui kiire ei tööta, proovi renderdust
+    products = await searchSelverRender(query);
+    if (products.length > 0) {
+        console.log(`✅ Selver (renderdus): ${products.length} toodet`);
+        return products;
+    }
+
+    console.log('❌ Selver - ükski meetod ei töötanud');
+    return [];
+}
+
+// ----------------------------
+// PARSE SELVER HTML (PARANDATUD)
 // ----------------------------
 function parseSelverHtml(html) {
     const $ = cheerio.load(html);
     const products = [];
     const seen = new Set();
 
+    // 1. Otsi kõik võimalikud tootekonteinerid
     const selectors = [
         '[data-product-id]',
         '.product-item',
@@ -162,36 +172,48 @@ function parseSelverHtml(html) {
         }
     }
 
+    // Kui ei leia, proovi linke
     if (items.length === 0) {
         items = $('a[href*="/toode/"], a[href*="/product/"]');
         console.log(`🔗 Leitud ${items.length} linki toodetele`);
     }
 
+    // Kui ikka ei leia, võta kõik lingid, mis sisaldavad rohkem kui 10 tähemärki teksti
     if (items.length === 0) {
         const allLinks = $('a[href]');
         allLinks.each((i, el) => {
             const text = $(el).text().trim();
-            if (text.length > 10 && text.length < 100) {
+            if (text.length > 10 && text.length < 150) {
                 items = items.add(el);
             }
         });
         console.log(`🔗 Leitud ${items.length} potentsiaalset tootelinki`);
     }
 
+    // Käi läbi kõik elemendid
     items.each((index, element) => {
         if (products.length >= 20) return false;
         try {
             const $item = $(element);
+
+            // Proovi nime leida erinevatest kohtadest
             let name = $item.find('.product-name, .name, .product-title, h2, h3, .title, .product-title, [data-testid="product-name"]').first().text().trim();
+            if (!name) name = $item.find('a[href*="/toode/"]').first().text().trim();
+            if (!name) name = $item.find('a[href*="/product/"]').first().text().trim();
             if (!name) name = $item.text().trim();
+
+            // Kui nimi on liiga lühike või sisaldab ebavajalikke märke, jäta vahele
             if (!name || name.length < 3) return;
 
+            // Puhasta nimi (eemalda liigsed tühikud)
             name = name.replace(/\s+/g, ' ').trim();
 
+            // Väldi dubleerimist
             const nameKey = name.toLowerCase().slice(0, 40);
             if (seen.has(nameKey)) return;
             seen.add(nameKey);
 
+            // Proovi hinda leida
             let price = null;
             const priceSelectors = ['.price', '.product-price', '.price-value', '.final-price', '.amount', '.product-price__price', '[data-testid="product-price"]'];
             let priceText = '';
@@ -202,21 +224,22 @@ function parseSelverHtml(html) {
                     break;
                 }
             }
+            if (!priceText) {
+                // Otsi kogu tekstist
+                const fullText = $item.text();
+                const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
+                if (matches && matches.length > 0) {
+                    priceText = matches[0];
+                }
+            }
             if (priceText) {
-                const match = priceText.match(/(\d+[.,]\d{2})\s*€?/);
+                const match = priceText.match(/(\d+[.,]\d{2})/);
                 if (match) {
                     price = parseFloat(match[1].replace(',', '.'));
                 }
             }
-            if (!price) {
-                const fullText = $item.text();
-                const matches = fullText.match(/(\d+[.,]\d{2})\s*€/g);
-                if (matches && matches.length > 0) {
-                    const match = matches[0].match(/(\d+[.,]\d{2})/);
-                    if (match) price = parseFloat(match[1].replace(',', '.'));
-                }
-            }
 
+            // Proovi URL leida
             let url = '';
             const link = $item.find('a[href]').first();
             if (link.length > 0) {
@@ -230,6 +253,7 @@ function parseSelverHtml(html) {
                 }
             }
 
+            // Lisa toode
             products.push({
                 name: name.slice(0, 200),
                 price_eur: price,
@@ -298,7 +322,6 @@ app.get('/', (req, res) => {
                         const data = await response.json();
                         let html = \`<div class="total">📊 Leitud \${data.total_count || 0} toodet</div>\`;
                         html += \`<div class="store-grid">\`;
-                        
                         for (const store of data.stores) {
                             const cls = store.name === 'Coop' ? 'coop' : 'selver';
                             html += \`<div class="store-section \${cls}"><h2>🏪 \${store.name} (\${store.count})</h2>\`;
@@ -332,7 +355,7 @@ app.get('/', (req, res) => {
 });
 
 // ----------------------------
-// API ENDPOINT
+// API
 // ----------------------------
 app.get('/search', async (req, res) => {
     const query = req.query.q || 'sai';
@@ -346,35 +369,27 @@ app.get('/search', async (req, res) => {
         total_count: 0
     };
 
-    const stores = [
-        { name: 'Coop', fn: searchCoop },
-        { name: 'Selver', fn: searchSelver },
-    ];
+    // Proovi Coop ja Selver paralleelselt (kiirem)
+    const [coopProducts, selverProducts] = await Promise.all([
+        searchCoop(query),
+        searchSelver(query)
+    ]);
 
-    for (const store of stores) {
-        try {
-            const startTime = Date.now();
-            const products = await store.fn(query);
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    results.stores.push({
+        name: 'Coop',
+        count: coopProducts.length,
+        products: coopProducts,
+        time: '0s'
+    });
+    results.total_count += coopProducts.length;
 
-            results.stores.push({
-                name: store.name,
-                count: products.length,
-                products: products,
-                time: `${elapsed}s`
-            });
-            results.total_count += products.length;
-            console.log(`⏱️ ${store.name}: ${elapsed}s - ${products.length} toodet`);
-        } catch (error) {
-            results.stores.push({
-                name: store.name,
-                count: 0,
-                products: [],
-                error: error.message
-            });
-            console.log(`❌ ${store.name} viga: ${error.message}`);
-        }
-    }
+    results.stores.push({
+        name: 'Selver',
+        count: selverProducts.length,
+        products: selverProducts,
+        time: '0s'
+    });
+    results.total_count += selverProducts.length;
 
     res.json(results);
 });
@@ -392,5 +407,4 @@ app.get('/ping', (req, res) => {
 // ----------------------------
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server käivitub pordil: ${PORT}`);
-    console.log(`🔗 http://localhost:${PORT}`);
 });
